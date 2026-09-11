@@ -88,6 +88,10 @@ BrowserComponent :: BrowserComponent(ICallbackMechanism & callbackMechanism,
       // (selecting a tree node drops the highlight), so it's ours to clear.
       _messagePanel.clear();
    };
+   _searchPanel.onSearchCleared        = [this]
+   {
+      _pendingSearchTag.Clear();   // so a reply that's still on its way doesn't bring the results back
+   };
    addAndMakeVisible(_searchPanel);
 
    _layout.setItemLayout(0, 140.0,   -0.8, 280.0);   // tree

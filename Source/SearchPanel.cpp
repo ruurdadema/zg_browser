@@ -14,12 +14,17 @@ SearchPanel :: SearchPanel()
    _searchText.setIndents(8, 5);
    _searchText.setTextToShowWhenEmpty("node name (wildcards allowed, eg fo*)", zgb::theme::textDim.darker(0.3f));
    _searchText.onReturnKey = [this] {startSearch();};
+   _searchText.onEscapeKey = [this] {clearSearch();};
    addAndMakeVisible(_searchText);
 
    _searchButton.setColour(juce::TextButton::buttonColourId, zgb::theme::accent);
    _searchButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
    _searchButton.onClick = [this] {startSearch();};
    addAndMakeVisible(_searchButton);
+
+   _clearButton.setTooltip("Clear the search (Esc)");
+   _clearButton.onClick = [this] {clearSearch();};
+   addAndMakeVisible(_clearButton);
 
    // Path wildcards have no case-insensitive form (that only exists for payload
    // filters), so say so rather than let the user wonder why "Foo" missed "foo".
@@ -47,6 +52,17 @@ void SearchPanel :: startSearch()
    if (onSearchRequested) onSearchRequested(text);
 }
 
+void SearchPanel :: clearSearch()
+{
+   const bool resultWasShown = (_listBox.getNumSelectedRows() > 0);
+
+   _searchText.clear();
+   clear();
+
+   if (onSearchCleared) onSearchCleared();
+   if ((resultWasShown)&&(onResultDeselected)) onResultDeselected();  // the Message pane was showing a result we just dropped
+}
+
 void SearchPanel :: setResults(const std::vector<std::pair<String, ConstMessageRef> > & results)
 {
    _searchPending = false;
@@ -67,6 +83,7 @@ void SearchPanel :: clear()
    _rows.clear();
    _emptyMessage = "Type a pattern and press Search.";
    _listBox.updateContent();
+   _listBox.deselectAllRows();
    repaint();
 }
 
@@ -79,6 +96,7 @@ void SearchPanel :: setConnected(bool isConnected)
 {
    _searchText.setEnabled(isConnected);
    _searchButton.setEnabled(isConnected);
+   _clearButton.setEnabled(isConnected);
 }
 
 int SearchPanel :: getNumRows()
@@ -137,7 +155,12 @@ void SearchPanel :: backgroundClicked(const juce::MouseEvent &)
 void SearchPanel :: paint(juce::Graphics & g)
 {
    g.fillAll(zgb::theme::background);
+}
 
+// The status message ("Searching...", "No matching nodes.") has to be drawn
+// over our children:  underneath, the list box's opaque background hides it.
+void SearchPanel :: paintOverChildren(juce::Graphics & g)
+{
    if (_rows.empty())
    {
       g.setColour(zgb::theme::textDim);
@@ -155,6 +178,8 @@ void SearchPanel :: resized()
 
    auto searchRow = r.removeFromTop(26);
    _searchButton.setBounds(searchRow.removeFromRight(74));
+   searchRow.removeFromRight(4);
+   _clearButton.setBounds(searchRow.removeFromRight(26));
    searchRow.removeFromRight(6);
    _searchText.setBounds(searchRow);
 

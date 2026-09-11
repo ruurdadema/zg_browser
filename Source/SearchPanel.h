@@ -31,8 +31,13 @@ public:
    /** Called when a result row is double-clicked (reveal it in the tree). */
    std::function<void(const muscle::String &)> onResultDoubleClicked;
 
-   /** Called when the user drops the result selection by clicking the empty part of the list. */
+   /** Called when the user drops the result selection -- by clicking the empty
+     * part of the list, or by clearing the search while a result was selected.
+     */
    std::function<void()> onResultDeselected;
+
+   /** Called when the user clears the search (any search still in flight should be forgotten). */
+   std::function<void()> onSearchCleared;
 
    /** Replaces the result list.  Paths are session-relative. */
    void setResults(const std::vector<std::pair<muscle::String, muscle::ConstMessageRef> > & results);
@@ -51,6 +56,7 @@ public:
 
    void resized() override;
    void paint(juce::Graphics & g) override;
+   void paintOverChildren(juce::Graphics & g) override;
 
    // ListBoxModel
    int getNumRows() override;
@@ -61,6 +67,7 @@ public:
 
 private:
    void startSearch();
+   void clearSearch();
 
    struct ResultRow
    {
@@ -75,6 +82,7 @@ private:
    juce::Label _titleLabel;
    juce::TextEditor _searchText;
    juce::TextButton _searchButton {"Search"};
+   juce::TextButton _clearButton {juce::String::fromUTF8("\xc3\x97")};   // U+00D7 MULTIPLICATION SIGN, spelled out so no compiler can mis-decode it
    juce::Label _hintLabel;
    juce::ListBox _listBox {"results", this};
 
