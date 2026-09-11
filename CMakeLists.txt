@@ -179,6 +179,7 @@ target_sources(zg_browser PRIVATE
    Source/BrowserComponent.cpp
    Source/NodeTreeItem.cpp
    Source/MessagePanel.cpp
+   Source/SearchPanel.cpp
    Source/ZGLookAndFeel.cpp)
 
 target_compile_definitions(zg_browser PRIVATE

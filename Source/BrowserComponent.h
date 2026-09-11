@@ -7,6 +7,7 @@
 #include "MessagePanel.h"
 #include "MuscleJuce.h"
 #include "NodeTreeItem.h"
+#include "SearchPanel.h"
 
 #include "util/Hashtable.h"
 #include "zg/messagetree/client/MessageTreeClientConnector.h"
@@ -50,8 +51,22 @@ public:
 private:
    // ITreeGatewaySubscriber
    void TreeNodeUpdated(const muscle::String & nodePath, const muscle::ConstMessageRef & optPayloadMsg, const muscle::String & optOpTag) override;
+   void SubtreesRequestResultReturned(const muscle::String & tag, const muscle::MessageRef & subtreeData) override;
    void TreeGatewayConnectionStateChanged() override;
+   void TreeLocalPeerPonged(const muscle::String & tag) override;
    void CallbackBatchEnds() override;
+
+   void startSearch(const juce::String & searchText);
+
+   /** Opens the tree one level at a time until (_revealPath) is on screen.
+     * Each level's children only arrive asynchronously, so after opening a level
+     * this pings the server, and is re-driven from TreeLocalPeerPonged() once
+     * that level's children are all in -- until it either lands or gives up.
+     * @param childrenAreSettled true iff every item that is open has already
+     *                           received all of its children (ie we're being
+     *                           called in response to our ping's pong)
+     */
+   void advanceReveal(bool childrenAreSettled);
 
    void subscribeToChildrenOf(const muscle::String & nodePath, NodeTreeItem & item);
    void unsubscribeFromChildrenOf(const muscle::String & nodePath, NodeTreeItem & item);
@@ -93,14 +108,29 @@ private:
    bool _wasConnected = false;
    bool _hasEverConnected = false;
 
+   // The tag of the search we're currently waiting for.  Replies carrying any
+   // other tag are from a search the user has already superseded, and are dropped.
+   muscle::String _pendingSearchTag;
+   uint32 _nextSearchID = 0;
+
+   // Set while we're walking the tree open towards a double-clicked search hit.
+   muscle::String _revealPath;
+
+   // The tag of the ping whose pong will tell us the level we just opened has
+   // all of its children.  Pongs carrying any other tag are from an abandoned reveal.
+   muscle::String _pendingRevealTag;
+   uint32 _nextRevealID = 0;
+
    juce::Label _titleLabel;
    juce::Label _statusLabel;
    juce::TextButton _backButton {juce::String::fromUTF8("\u2190 Systems")};
    juce::TreeView _treeView;
    std::unique_ptr<NodeTreeItem> _rootItem;
    MessagePanel _messagePanel;
+   SearchPanel _searchPanel;
    juce::StretchableLayoutManager _layout;
    std::unique_ptr<juce::StretchableLayoutResizerBar> _divider;
+   std::unique_ptr<juce::StretchableLayoutResizerBar> _searchDivider;
    StatusOverlay _overlay;
 
    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrowserComponent)

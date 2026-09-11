@@ -43,4 +43,10 @@ inline muscle::String childrenSubscriptionString(const muscle::String & nodePath
    return nodePath.IsEmpty() ? muscle::String("*") : (nodePath + "/*");
 }
 
+/** How many levels down a search looks.  A path clause never spans a '/', so a
+  * pattern only matches nodes at its own depth and a search has to ask for one
+  * query-string per level -- this is where that stops.
+  */
+static const uint32 kMaxSearchDepth = 8;
+
 }  // namespace zgb
