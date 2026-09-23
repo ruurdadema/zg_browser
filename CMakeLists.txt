@@ -177,6 +177,8 @@ target_sources(zg_browser PRIVATE
    Source/MainComponent.cpp
    Source/DiscoveryComponent.cpp
    Source/BrowserComponent.cpp
+   Source/MuscleNodeSource.cpp
+   Source/ZGNodeSource.cpp
    Source/NodeTreeItem.cpp
    Source/MessagePanel.cpp
    Source/SearchPanel.cpp

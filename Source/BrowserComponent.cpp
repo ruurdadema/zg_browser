@@ -3,8 +3,6 @@
 #include <algorithm>
 
 #include "Theme.h"
-#include "reflector/StorageReflectConstants.h"               // for PR_NAME_NODEDATA
-#include "zg/discovery/common/DiscoveryUtilityFunctions.h"   // for ZG_DISCOVERY_NAME_*
 
 using namespace muscle;
 
@@ -32,16 +30,15 @@ void BrowserComponent :: StatusOverlay :: paint(juce::Graphics & g)
 
 // ---------------------------------------------------------------------------
 
-BrowserComponent :: BrowserComponent(ICallbackMechanism & callbackMechanism,
-                                     const String & signaturePattern,
-                                     const String & systemNamePattern)
-   : zg::ITreeGatewaySubscriber(NULL)   // our gateway isn't constructed yet; we register below
-   , _systemName(systemNamePattern)
-   , _connector(&callbackMechanism)
+BrowserComponent :: BrowserComponent(std::unique_ptr<NodeSource> source,
+                                     const juce::String & title,
+                                     const juce::String & targetDescription)
+   : _targetDescription(targetDescription)
+   , _source(std::move(source))
 {
-   SetGateway(&_connector);
+   _source->setListener(this);
 
-   _titleLabel.setText(zgb::toJuce(systemNamePattern), juce::dontSendNotification);
+   _titleLabel.setText(title, juce::dontSendNotification);
    _titleLabel.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
    addAndMakeVisible(_titleLabel);
 
@@ -106,15 +103,15 @@ BrowserComponent :: BrowserComponent(ICallbackMechanism & callbackMechanism,
 
    addAndMakeVisible(_overlay);
 
-   // Opening the root subscribes us to the top level of the database.  It is
-   // fine to do this before we're connected:  the gateway remembers our
+   // Opening the root subscribes us to the top level of the tree.  It is fine
+   // to do this before we're connected:  the source remembers our
    // subscriptions and (re)sends them whenever a connection is established.
    _rootItem->setOpen(true);
 
    status_t ret;
-   if (_connector.Start(signaturePattern, systemNamePattern).IsError(ret))
+   if (_source->start().IsError(ret))
    {
-      LogTime(MUSCLE_LOG_ERROR, "Couldn't start MessageTreeClientConnector for system [%s] [%s]\n", systemNamePattern(), ret());
+      LogTime(MUSCLE_LOG_ERROR, "Couldn't start connecting to %s [%s]\n", targetDescription.toRawUTF8(), ret());
    }
 
    updateConnectionStateUI();
@@ -122,8 +119,7 @@ BrowserComponent :: BrowserComponent(ICallbackMechanism & callbackMechanism,
 
 BrowserComponent :: ~BrowserComponent()
 {
-   SetGateway(NULL);       // stop receiving callbacks before anything gets torn down
-   _connector.Stop();
+   _source.reset();        // stops its connection, and with it the callbacks, before anything gets torn down
 
    _treeView.setRootItem(NULL);
    _rootItem.reset();
@@ -137,40 +133,36 @@ void BrowserComponent :: subscribeToChildrenOf(const String & nodePath, NodeTree
 {
    if (item.isSubscribed()) return;
 
-   const String subPath = zgb::childrenSubscriptionString(nodePath);
-
    status_t ret;
-   if (AddTreeSubscription(subPath).IsOK(ret))
+   if (_source->subscribeToChildrenOf(nodePath).IsOK(ret))
    {
-      (void) _subscriptions.PutWithDefault(subPath);
+      (void) _subscriptions.PutWithDefault(nodePath);
       item.setSubscribed(true);
    }
-   else LogTime(MUSCLE_LOG_ERROR, "Couldn't subscribe to [%s] [%s]\n", subPath(), ret());
+   else LogTime(MUSCLE_LOG_ERROR, "Couldn't subscribe to the children of [/%s] [%s]\n", nodePath(), ret());
 }
 
 void BrowserComponent :: unsubscribeFromChildrenOf(const String & nodePath, NodeTreeItem & item)
 {
    if (item.isSubscribed() == false) return;
 
-   const String subPath = zgb::childrenSubscriptionString(nodePath);
-   (void) RemoveTreeSubscription(subPath);
-   (void) _subscriptions.Remove(subPath);
+   _source->unsubscribeFromChildrenOf(nodePath);
+   (void) _subscriptions.Remove(nodePath);
    item.setSubscribed(false);
 }
 
 void BrowserComponent :: unsubscribeFromDescendantsOf(const String & nodePath, bool includeSelf)
 {
-   const String ownSubPath = zgb::childrenSubscriptionString(nodePath);
-   const String prefix     = nodePath.IsEmpty() ? GetEmptyString() : (nodePath + "/");
+   const String prefix = nodePath.IsEmpty() ? GetEmptyString() : (nodePath + "/");
 
    for (HashtableIterator<String, Void> iter(_subscriptions); iter.HasData(); iter++)
    {
-      const String subPath = iter.GetKey();   // deliberately a copy; we may remove this entry below
-      const bool isSelf = (subPath == ownSubPath);
-      if ((isSelf ? includeSelf : subPath.StartsWith(prefix)))
+      const String subscribedPath = iter.GetKey();   // deliberately a copy; we may remove this entry below
+      const bool isSelf = (subscribedPath == nodePath);
+      if ((isSelf ? includeSelf : subscribedPath.StartsWith(prefix)))
       {
-         (void) RemoveTreeSubscription(subPath);
-         (void) _subscriptions.Remove(subPath);
+         _source->unsubscribeFromChildrenOf(subscribedPath);
+         (void) _subscriptions.Remove(subscribedPath);
       }
    }
 }
@@ -212,8 +204,8 @@ NodeTreeItem * BrowserComponent :: createChildItem(NodeTreeItem & parentItem, co
    NodeTreeItem * newItem = parentItem.addChildNode(childName);
 
    // If this node was open before we lost the connection, re-open it without
-   // re-subscribing:  the gateway still holds (and has re-sent) that subscription.
-   if (_subscriptions.ContainsKey(zgb::childrenSubscriptionString(newItem->getNodePath())))
+   // re-subscribing:  the source still holds (and has re-sent) that subscription.
+   if (_subscriptions.ContainsKey(newItem->getNodePath()))
    {
       newItem->setSubscribed(true);
       newItem->setOpen(true);
@@ -259,16 +251,14 @@ juce::String BrowserComponent :: getSummaryForPath(const String & nodePath) cons
 }
 
 // ---------------------------------------------------------------------------
-//  ITreeGatewaySubscriber callbacks
+//  NodeSource callbacks
 // ---------------------------------------------------------------------------
 
-void BrowserComponent :: TreeNodeUpdated(const String & nodePath, const ConstMessageRef & optPayloadMsg, const String & /*optOpTag*/)
+void BrowserComponent :: nodeUpdated(const String & nodePath, const ConstMessageRef & optPayload)
 {
-   if (nodePath.IsEmpty()) return;   // the session-root itself is never shown as a child
-
-   if (optPayloadMsg())
+   if (optPayload())
    {
-      (void) _pathToMessage.Put(nodePath, optPayloadMsg);
+      (void) _pathToMessage.Put(nodePath, optPayload);
       handleNodeAddedOrUpdated(nodePath);
    }
    else
@@ -278,7 +268,6 @@ void BrowserComponent :: TreeNodeUpdated(const String & nodePath, const ConstMes
    }
 
    if ((_hasSelection)&&(_selectedPath == nodePath)) _messagePanelNeedsRefresh = true;
-   if (IsInCallbackBatch() == false) CallbackBatchEnds();
 }
 
 void BrowserComponent :: handleNodeAddedOrUpdated(const String & nodePath)
@@ -301,7 +290,7 @@ void BrowserComponent :: handleNodeRemoved(const String & nodePath)
    if (parentItem) parentItem->removeChildNode(zgb::leafNameOf(nodePath));
 }
 
-void BrowserComponent :: CallbackBatchEnds()
+void BrowserComponent :: callbackBatchEnded()
 {
    if (_messagePanelNeedsRefresh)
    {
@@ -316,25 +305,14 @@ void BrowserComponent :: CallbackBatchEnds()
 
 void BrowserComponent :: startSearch(const juce::String & searchText)
 {
-   // A path clause never spans a '/', so a pattern only ever matches nodes at
-   // its own depth -- to search the whole database we ask for every depth at
-   // once.  RequestTreeNodeSubtrees takes the whole list in a single request.
    const String pattern = zgb::toMuscle(searchText).Contains("*")
                         ? zgb::toMuscle(searchText)
                         : zgb::toMuscle(searchText).WithPrepend("*").WithAppend("*");
 
-   Queue<String> queryStrings;
-   String prefix;
-   for (uint32 i=0; i<zgb::kMaxSearchDepth; i++)
-   {
-      (void) queryStrings.AddTail(prefix + pattern);
-      prefix += "*/";
-   }
-
    _pendingSearchTag = String("zgbsearch%1").Arg(++_nextSearchID);
 
    status_t ret;
-   if (RequestTreeNodeSubtrees(queryStrings, Queue<ConstQueryFilterRef>(), _pendingSearchTag, zgb::kMaxSearchDepth).IsError(ret))
+   if (_source->requestSearch(pattern, _pendingSearchTag).IsError(ret))
    {
       LogTime(MUSCLE_LOG_ERROR, "Couldn't request search for [%s] [%s]\n", pattern(), ret());
       _pendingSearchTag.Clear();
@@ -342,31 +320,12 @@ void BrowserComponent :: startSearch(const juce::String & searchText)
    }
 }
 
-void BrowserComponent :: SubtreesRequestResultReturned(const String & tag, const MessageRef & subtreeData)
+void BrowserComponent :: searchResultsReturned(const String & tag, const std::vector<std::pair<String, ConstMessageRef> > & unsortedResults)
 {
    if ((tag != _pendingSearchTag)||(_pendingSearchTag.IsEmpty())) return;  // superseded by a newer search
    _pendingSearchTag.Clear();
 
-   std::vector<std::pair<String, ConstMessageRef> > results;
-
-   if (subtreeData())
-   {
-      // Each matched node is one top-level field, keyed by its node path, whose
-      // value is the SaveNodeTreeToMessage() form (payload under PR_NAME_NODEDATA).
-      // The gateway has already made those paths session-relative for us.
-      MessageRef nodeRef;
-      for (MessageFieldNameIterator iter = subtreeData()->GetFieldNameIterator(B_MESSAGE_TYPE); iter.HasData(); iter++)
-      {
-         const String & fieldName = iter.GetFieldName();
-         if (subtreeData()->FindMessage(fieldName, 0, nodeRef).IsError()) continue;
-
-         MessageRef payloadRef;
-         (void) nodeRef()->FindMessage(PR_NAME_NODEDATA, payloadRef);
-
-         results.push_back(std::make_pair(fieldName, ConstMessageRef(payloadRef)));
-      }
-   }
-
+   std::vector<std::pair<String, ConstMessageRef> > results(unsortedResults);
    std::sort(results.begin(), results.end(),
              [](const std::pair<String, ConstMessageRef> & a, const std::pair<String, ConstMessageRef> & b)
              {
@@ -376,7 +335,7 @@ void BrowserComponent :: SubtreesRequestResultReturned(const String & tag, const
    _searchPanel.setResults(results);
 }
 
-void BrowserComponent :: TreeLocalPeerPonged(const String & tag)
+void BrowserComponent :: pongReceived(const String & tag)
 {
    if ((_pendingRevealTag.IsEmpty())||(tag != _pendingRevealTag)) return;  // not the pong our reveal is waiting for
    _pendingRevealTag.Clear();
@@ -417,7 +376,7 @@ void BrowserComponent :: advanceReveal(bool childrenAreSettled)
          _pendingRevealTag = String("zgbreveal%1").Arg(++_nextRevealID);
 
          status_t ret;
-         if (PingTreeLocalPeer(_pendingRevealTag).IsError(ret))
+         if (_source->ping(_pendingRevealTag).IsError(ret))
          {
             LogTime(MUSCLE_LOG_ERROR, "Couldn't ping while revealing [%s] [%s]\n", _revealPath(), ret());
             _pendingRevealTag.Clear();
@@ -442,16 +401,16 @@ void BrowserComponent :: advanceReveal(bool childrenAreSettled)
    _revealPath.Clear();
 }
 
-void BrowserComponent :: TreeGatewayConnectionStateChanged()
+void BrowserComponent :: connectionStateChanged()
 {
-   const bool isConnected = IsTreeGatewayConnected();
+   const bool isConnected = _source->isConnected();
    if (isConnected == _wasConnected) return;
    _wasConnected = isConnected;
    if (isConnected) _hasEverConnected = true;
 
    if (isConnected == false)
    {
-      // Our subscriptions are kept (the gateway re-sends them when the
+      // Our subscriptions are kept (the source re-sends them when the
       // connection comes back), but the data we cached for them is now stale,
       // so drop it and let the fresh subscription-results rebuild the tree.
       _pathToMessage.Clear();
@@ -486,16 +445,13 @@ void BrowserComponent :: refreshMessagePanel()
 
 void BrowserComponent :: updateConnectionStateUI()
 {
-   const bool isConnected = IsTreeGatewayConnected();
+   const bool isConnected = _source->isConnected();
 
    juce::String status;
    if (isConnected)
    {
-      const MessageRef peerInfo = _connector.GetConnectedPeerInfo();
-      const String source = peerInfo() ? peerInfo()->GetString(ZG_DISCOVERY_NAME_SOURCE) : GetEmptyString();
-      const IPAddressAndPort sourceIAP(source, 0, false);
-      const String host = sourceIAP.GetIPAddress().IsValid() ? sourceIAP.ToString(false) : source;
-      status = host.IsEmpty() ? juce::String("Connected") : ("Connected to " + zgb::toJuce(host));
+      const juce::String host = _source->getConnectedHostDescription();
+      status = host.isEmpty() ? juce::String("Connected") : ("Connected to " + host);
    }
    else status = "Not connected";
 
@@ -505,8 +461,8 @@ void BrowserComponent :: updateConnectionStateUI()
    if (isConnected == false)
    {
       _overlay.setStatusText(_hasEverConnected
-         ? ("Disconnected from \"" + zgb::toJuce(_systemName) + "\"\n\nReconnecting automatically as soon as the system comes back...")
-         : ("Looking for \"" + zgb::toJuce(_systemName) + "\" on the local network..."));
+         ? ("Disconnected from " + _targetDescription + "\n\nReconnecting automatically as soon as it comes back...")
+         : ("Looking for " + _targetDescription + " on the local network..."));
    }
    _overlay.setVisible(isConnected == false);
 }

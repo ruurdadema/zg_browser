@@ -6,32 +6,32 @@
 
 #include "MessagePanel.h"
 #include "MuscleJuce.h"
+#include "NodeSource.h"
 #include "NodeTreeItem.h"
 #include "SearchPanel.h"
 
 #include "util/Hashtable.h"
-#include "zg/messagetree/client/MessageTreeClientConnector.h"
-#include "zg/messagetree/gateway/ITreeGatewaySubscriber.h"
 
-/** Browses the database of one ZG system.
+/** Browses the node tree of one NodeSource -- a ZG system's database, or one
+  * peer's whole MUSCLE server.
   *
-  * The MessageTreeClientConnector does the discovery, TCP connection and
-  * automatic reconnection for us; we just drive the tree on top of it.  A node
-  * of the tree is subscribed to when it is opened and unsubscribed from when it
-  * is closed, so the client only ever holds the part of the database that is
-  * actually on screen -- and that part is always live.
+  * The source does the discovery, TCP connection and automatic reconnection for
+  * us; we just drive the tree on top of it.  A node of the tree is subscribed to
+  * when it is opened and unsubscribed from when it is closed, so the client only
+  * ever holds the part of the tree that is actually on screen -- and that part
+  * is always live.
   */
 class BrowserComponent final : public juce::Component,
-                               private zg::ITreeGatewaySubscriber
+                               private NodeSource::Listener
 {
 public:
-   /** @param callbackMechanism marshals the network thread's callbacks onto the JUCE message thread
-     * @param signaturePattern the kind of ZG server to connect to (may be wildcarded, eg "*")
-     * @param systemNamePattern the ZG system to connect to (may be wildcarded)
+   /** @param source where the tree comes from; we start it
+     * @param title shown in the header (eg the system's name)
+     * @param targetDescription what we're connecting to, for the "not connected" overlay (eg "system Venue")
      */
-   BrowserComponent(muscle::ICallbackMechanism & callbackMechanism,
-                    const muscle::String & signaturePattern,
-                    const muscle::String & systemNamePattern);
+   BrowserComponent(std::unique_ptr<NodeSource> source,
+                    const juce::String & title,
+                    const juce::String & targetDescription);
 
    ~BrowserComponent() override;
 
@@ -49,12 +49,12 @@ public:
    juce::String getSummaryForPath(const muscle::String & nodePath) const;
 
 private:
-   // ITreeGatewaySubscriber
-   void TreeNodeUpdated(const muscle::String & nodePath, const muscle::ConstMessageRef & optPayloadMsg, const muscle::String & optOpTag) override;
-   void SubtreesRequestResultReturned(const muscle::String & tag, const muscle::MessageRef & subtreeData) override;
-   void TreeGatewayConnectionStateChanged() override;
-   void TreeLocalPeerPonged(const muscle::String & tag) override;
-   void CallbackBatchEnds() override;
+   // NodeSource::Listener
+   void nodeUpdated(const muscle::String & nodePath, const muscle::ConstMessageRef & optPayload) override;
+   void searchResultsReturned(const muscle::String & tag, const std::vector<std::pair<muscle::String, muscle::ConstMessageRef> > & results) override;
+   void pongReceived(const muscle::String & tag) override;
+   void connectionStateChanged() override;
+   void callbackBatchEnded() override;
 
    void startSearch(const juce::String & searchText);
 
@@ -92,14 +92,14 @@ private:
       juce::String _text;
    };
 
-   const muscle::String _systemName;
+   const juce::String _targetDescription;
 
-   zg::MessageTreeClientConnector _connector;
+   std::unique_ptr<NodeSource> _source;
 
    // The part of the server's database we're currently holding, by session-relative path
    muscle::Hashtable<muscle::String, muscle::ConstMessageRef> _pathToMessage;
 
-   // The subscription-strings (eg "srv/*") we currently hold, one per open tree node
+   // The paths of the nodes whose children we're currently subscribed to, one per open tree node
    muscle::Hashtable<muscle::String, muscle::Void> _subscriptions;
 
    muscle::String _selectedPath;

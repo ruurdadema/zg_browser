@@ -11,7 +11,7 @@
 #include "platform/juce/JUCECallbackMechanism.h"
 #include "zg/discovery/client/SystemDiscoveryClient.h"
 
-/** Top-level view: either the discovery list or the browser for one system. */
+/** Top-level view: either the discovery list or the browser for one system (or peer). */
 class MainComponent final : public juce::Component
 {
 public:
@@ -22,7 +22,9 @@ public:
    void paint(juce::Graphics & g) override;
 
 private:
-   void showBrowserFor(const muscle::String & signaturePattern, const muscle::String & systemName);
+   void showSystemBrowser(const muscle::String & signaturePattern, const muscle::String & systemName);
+   void showPeerBrowser(const muscle::String & signature, const muscle::String & systemName, const zg::ZGPeerID & peerID, const juce::String & peerAddress);
+   void showBrowser(std::unique_ptr<NodeSource> source, const juce::String & title, const juce::String & targetDescription);
    void showDiscovery();
 
    // Declaration order matters:  the callback mechanism has to outlive everything

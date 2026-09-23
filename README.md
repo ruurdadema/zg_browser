@@ -6,16 +6,30 @@ but pointed at a ZG system (discovered on the LAN) rather than at a single `musc
 built on JUCE instead of Qt.
 
 * **Startup:** the app listens for ZG systems on the local network with `zg::SystemDiscoveryClient`
-  and lists what it finds (system name, server signature, peer count, addresses).
-* **Browsing:** clicking a system opens a live tree of its database. Opening a tree node subscribes
+  and lists what it finds: each system (name, server signature, peer count), with its peers
+  (address, peer ID) indented beneath it.
+* **Two ways in:**
+  * *Double-click a system* for the **ZG view**: the system's database, through ZG's MessageTree gateway
+    (`zg::MessageTreeClientConnector`, which connects to whichever peer is available and fails
+    over to another if it goes away). Paths are session-relative. Note that such paths match that
+    level of *every* session on the server, so nodes that clients keep in their own sessions (eg a
+    `ClientDataMessageTreeDatabaseObject`'s local copies) show up at the root next to the database's.
+  * *Double-click a peer* for the **MUSCLE view**: that one peer's whole MUSCLE node tree, as a plain
+    `muscled` browser would show it -- `/`, the host nodes, the session nodes (the ZG database lives
+    in the session whose host is `zg`), and every session's own nodes. ZG discovery and
+    `zg::ClientConnector` still find and (re)connect to the peer, but only to that peer; once
+    connected the browser speaks raw MUSCLE (`SUBSCRIBE:` parameters, `PR_COMMAND_GETDATATREES`,
+    `PR_COMMAND_PING`) with absolute paths. A peer can only be opened if it advertises
+    its TCP port (the `port` peer attribute).
+* **Browsing:** either way you get a live tree. Opening a tree node subscribes
   to that node's children; closing it drops the subscription (and the cached data below it) again,
   so the client only ever holds the part of the database that is on screen -- and that part is
   always up to date, including nodes other clients add or delete while you watch.
 * **Selection:** the right-hand pane shows the selected node's `Message` payload (and, for deflated
   payloads, its inflated form as well).
-* **Disconnection:** if the system goes away, an overlay says so and `zg::MessageTreeClientConnector`
-  keeps trying; when the system comes back the tree is rebuilt and the nodes you had open re-open
-  themselves. The header stays live throughout, so you can always go back to the systems list.
+* **Disconnection:** if the system (or, in the MUSCLE view, the peer) goes away, an overlay says so
+  and the connector keeps trying; when it comes back the tree is rebuilt and the nodes you had open
+  re-open themselves. The header stays live throughout, so you can always go back to the systems list.
 
 ## Building
 

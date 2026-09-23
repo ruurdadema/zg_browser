@@ -15,7 +15,7 @@ DiscoveryComponent :: DiscoveryComponent(zg::SystemDiscoveryClient & discoveryCl
    _titleLabel.setFont(juce::Font(juce::FontOptions(20.0f, juce::Font::bold)));
    addAndMakeVisible(_titleLabel);
 
-   _hintLabel.setText("Click a system to browse its database.", juce::dontSendNotification);
+   _hintLabel.setText("Double-click a system to browse its database, or one of its peers to browse that peer's whole MUSCLE node tree.", juce::dontSendNotification);
    _hintLabel.setFont(juce::Font(juce::FontOptions(13.0f)));
    _hintLabel.setColour(juce::Label::textColourId, zgb::theme::textDim);
    addAndMakeVisible(_hintLabel);
@@ -54,43 +54,82 @@ void DiscoveryComponent :: DiscoveryUpdate(const String & systemName, const Mess
 
 void DiscoveryComponent :: rebuildRows()
 {
-   const int previouslySelected = _listBox.getSelectedRow();
+   const int previouslySelectedRow = _listBox.getSelectedRow();
+   const juce::String previouslySelected = ((previouslySelectedRow >= 0)&&(previouslySelectedRow < (int) _rows.size())) ? _rows[(size_t) previouslySelectedRow].getKey() : juce::String();
 
-   _rows.clear();
-   _rows.reserve(_systems.GetNumItems());
+   std::vector<Row> systemRows;
+   std::vector<std::vector<Row> > peerRowsPerSystem;
 
    for (ConstHashtableIterator<String, MessageRef> iter(_systems); iter.HasData(); iter++)
    {
-      SystemRow row;
+      Row row;
       row._systemName = iter.GetKey();
+      row._heading    = zgb::toJuce(row._systemName);
 
-      juce::StringArray addresses;
-      uint32 numPeers = 0;
+      std::vector<Row> peerRows;
 
       ConstMessageRef peerInfo;
       for (uint32 i=0; iter.GetValue()()->FindMessage(ZG_DISCOVERY_NAME_PEERINFO, i, peerInfo).IsOK(); i++)
       {
-         numPeers++;
          if (row._signature.IsEmpty()) row._signature = peerInfo()->GetString(ZG_DISCOVERY_NAME_SIGNATURE);
 
+         Row peerRow;
+         peerRow._isPeer     = true;
+         peerRow._systemName = row._systemName;
+         peerRow._signature  = peerInfo()->GetString(ZG_DISCOVERY_NAME_SIGNATURE);
+         (void) peerInfo()->FindFlat(ZG_DISCOVERY_NAME_PEERID, peerRow._peerID);
+
+         // "src" is where the peer's discovery reply came from; "port" is the TCP
+         // port its MUSCLE server accepts on (a peer attribute, so it may be absent).
          const String source = peerInfo()->GetString(ZG_DISCOVERY_NAME_SOURCE);
-         if (source.HasChars()) addresses.addIfNotAlreadyThere(zgb::toJuce(source));
+         IPAddressAndPort iap(source, 0, false);
+         uint16 port = 0;
+         if ((iap.GetIPAddress().IsValid())&&(peerInfo()->FindInt16("port", port).IsOK())&&(port > 0))
+         {
+            iap.SetPort(port);
+            peerRow._peerAddress = zgb::toJuce(iap.ToString());
+         }
+
+         peerRow._heading = peerRow._peerAddress.isNotEmpty() ? peerRow._peerAddress
+                                                              : (zgb::toJuce(source.HasChars() ? source : String("(unknown address)")) + "  (no MUSCLE port advertised)");
+         peerRow._detail  = "peer " + zgb::toJuce(peerRow._peerID.ToString());
+
+         peerRows.push_back(peerRow);
       }
 
-      row._detail = zgb::toJuce(row._signature.IsEmpty() ? String("(unknown signature)") : row._signature)
-                  + juce::String("  |  ") + juce::String((int) numPeers) + (numPeers == 1 ? " peer" : " peers")
-                  + (addresses.isEmpty() ? juce::String() : ("  |  " + addresses.joinIntoString(", ")));
+      std::sort(peerRows.begin(), peerRows.end(), [](const Row & a, const Row & b)
+      {
+         return a._heading.compareNatural(b._heading) < 0;
+      });
 
-      _rows.push_back(row);
+      const size_t numPeers = peerRows.size();
+      row._detail = zgb::toJuce(row._signature.IsEmpty() ? String("(unknown signature)") : row._signature)
+                  + juce::String("  |  ") + juce::String((int) numPeers) + (numPeers == 1 ? " peer" : " peers");
+
+      systemRows.push_back(row);
+      peerRowsPerSystem.push_back(peerRows);
    }
 
-   std::sort(_rows.begin(), _rows.end(), [](const SystemRow & a, const SystemRow & b)
+   // Sort the systems, keeping each one's peers with it
+   std::vector<size_t> order(systemRows.size());
+   for (size_t i=0; i<order.size(); i++) order[i] = i;
+   std::sort(order.begin(), order.end(), [&systemRows](size_t a, size_t b)
    {
-      return zgb::toJuce(a._systemName).compareNatural(zgb::toJuce(b._systemName)) < 0;
+      return systemRows[a]._heading.compareNatural(systemRows[b]._heading) < 0;
    });
 
+   _rows.clear();
+   int rowToSelect = -1;
+   for (size_t idx : order)
+   {
+      _rows.push_back(systemRows[idx]);
+      for (const Row & peerRow : peerRowsPerSystem[idx]) _rows.push_back(peerRow);
+   }
+   for (size_t i=0; i<_rows.size(); i++) if ((previouslySelected.isNotEmpty())&&(_rows[i].getKey() == previouslySelected)) rowToSelect = (int) i;
+
    _listBox.updateContent();
-   if ((previouslySelected >= 0)&&(previouslySelected < (int) _rows.size())) _listBox.selectRow(previouslySelected, true, false);
+   if (rowToSelect >= 0) _listBox.selectRow(rowToSelect, true, true);
+                    else _listBox.deselectAllRows();
    repaint();
 }
 
@@ -102,23 +141,26 @@ int DiscoveryComponent :: getNumRows()
 void DiscoveryComponent :: paintListBoxItem(int rowNumber, juce::Graphics & g, int width, int height, bool rowIsSelected)
 {
    if ((rowNumber < 0)||(rowNumber >= (int) _rows.size())) return;
-   const SystemRow & row = _rows[(size_t) rowNumber];
+   const Row & row = _rows[(size_t) rowNumber];
 
    if (rowIsSelected) g.fillAll(zgb::theme::accent);
 
-   g.setColour(zgb::theme::text);
-   g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
-   g.drawText(zgb::toJuce(row._systemName), 12, 5, width-24, 20, juce::Justification::centredLeft, true);
+   const int indent = row._isPeer ? 36 : 12;
+   const bool connectable = (row._isPeer == false)||(row._peerAddress.isNotEmpty());
+
+   g.setColour(connectable ? zgb::theme::text : zgb::theme::textDim);
+   g.setFont(juce::Font(juce::FontOptions(row._isPeer ? 14.0f : 15.0f, row._isPeer ? juce::Font::plain : juce::Font::bold)));
+   g.drawText(row._heading, indent, 5, width-indent-12, 20, juce::Justification::centredLeft, true);
 
    g.setColour(rowIsSelected ? juce::Colours::white.withAlpha(0.8f) : zgb::theme::textDim);
    g.setFont(juce::Font(juce::FontOptions(12.5f)));
-   g.drawText(row._detail, 12, 24, width-24, 17, juce::Justification::centredLeft, true);
+   g.drawText(row._detail, indent, 24, width-indent-12, 17, juce::Justification::centredLeft, true);
 
    g.setColour(zgb::theme::header);
    g.drawHorizontalLine(height-1, 0.0f, (float) width);
 }
 
-void DiscoveryComponent :: listBoxItemClicked(int rowNumber, const juce::MouseEvent &)
+void DiscoveryComponent :: listBoxItemDoubleClicked(int rowNumber, const juce::MouseEvent &)
 {
    chooseRow(rowNumber);
 }
@@ -132,8 +174,14 @@ void DiscoveryComponent :: chooseRow(int rowNumber)
 {
    if ((rowNumber < 0)||(rowNumber >= (int) _rows.size())) return;
 
-   const SystemRow & row = _rows[(size_t) rowNumber];
-   if (onSystemChosen) onSystemChosen(row._signature.IsEmpty() ? String("*") : row._signature, row._systemName);
+   const Row & row = _rows[(size_t) rowNumber];
+   const String signature = row._signature.IsEmpty() ? String("*") : row._signature;
+
+   if (row._isPeer == false)
+   {
+      if (onSystemChosen) onSystemChosen(signature, row._systemName);
+   }
+   else if ((row._peerAddress.isNotEmpty())&&(onPeerChosen)) onPeerChosen(signature, row._systemName, row._peerID, row._peerAddress);
 }
 
 void DiscoveryComponent :: connectToTypedSystemName()

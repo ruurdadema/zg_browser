@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 
+#include "MuscleNodeSource.h"
 #include "Theme.h"
+#include "ZGNodeSource.h"
 
 using namespace muscle;
 
@@ -10,7 +12,11 @@ MainComponent :: MainComponent()
 {
    _discoveryView.onSystemChosen = [this](const String & signaturePattern, const String & systemName)
    {
-      showBrowserFor(signaturePattern, systemName);
+      showSystemBrowser(signaturePattern, systemName);
+   };
+   _discoveryView.onPeerChosen = [this](const String & signature, const String & systemName, const zg::ZGPeerID & peerID, const juce::String & peerAddress)
+   {
+      showPeerBrowser(signature, systemName, peerID, peerAddress);
    };
    addAndMakeVisible(_discoveryView);
 
@@ -29,9 +35,25 @@ MainComponent :: ~MainComponent()
    _discoveryClient.Stop();
 }
 
-void MainComponent :: showBrowserFor(const String & signaturePattern, const String & systemName)
+void MainComponent :: showSystemBrowser(const String & signaturePattern, const String & systemName)
 {
-   _browserView.reset(new BrowserComponent(_callbackMechanism, signaturePattern, systemName));
+   const juce::String name = zgb::toJuce(systemName);
+   showBrowser(std::make_unique<ZGNodeSource>(_callbackMechanism, signaturePattern, systemName),
+               name, "system \"" + name + "\"");
+}
+
+void MainComponent :: showPeerBrowser(const String & signature, const String & systemName, const zg::ZGPeerID & peerID, const juce::String & peerAddress)
+{
+   const juce::String name = zgb::toJuce(systemName);
+   showBrowser(std::make_unique<MuscleNodeSource>(_callbackMechanism, signature, systemName, peerID),
+               name + juce::String::fromUTF8("  \u203a  ") + peerAddress + "  (MUSCLE)",
+               "peer " + peerAddress + " of \"" + name + "\"");
+}
+
+void MainComponent :: showBrowser(std::unique_ptr<NodeSource> source, const juce::String & title, const juce::String & targetDescription)
+{
+   _browserView.reset();   // the old browser's connection goes away before the new one starts
+   _browserView.reset(new BrowserComponent(std::move(source), title, targetDescription));
    _browserView->onBackButtonClicked = [this] {showDiscovery();};
    addAndMakeVisible(*_browserView);
    _browserView->setBounds(getLocalBounds());
